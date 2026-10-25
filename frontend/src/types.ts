@@ -1,3 +1,10 @@
+export interface Paginated<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
 export interface Issue {
   id: string;
   service: string;

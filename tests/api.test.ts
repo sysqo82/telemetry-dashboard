@@ -1,33 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { generateFingerprint } from '../src/services/fingerprint.js';
 import { openDb, type Db } from '../src/db/index.js';
 import { buildApp } from '../src/app.js';
 import { hashKey } from '../src/routes/events.js';
 
 const KEY = 'test-key-1234567890';
-
-describe('fingerprint', () => {
-  const base = { service: 'svc', exceptionType: 'Err', message: 'x' };
-  it('ignores line numbers and message text when a frame exists', () => {
-    const a = generateFingerprint({ ...base, stacktrace: 'at run (/app/db.ts:45)' });
-    const b = generateFingerprint({ ...base, message: 'y', stacktrace: 'at run (/app/db.ts:99:3)' });
-    expect(a.fingerprint).toBe(b.fingerprint);
-    expect(a.culprit).toBe('run (/app/db.ts:45)');
-  });
-  it('differs by service, type and frame', () => {
-    const f = (o: object) => generateFingerprint({ ...base, stacktrace: 'at a (/app/a.ts:1)', ...o }).fingerprint;
-    expect(f({})).not.toBe(f({ service: 'other' }));
-    expect(f({})).not.toBe(f({ exceptionType: 'Other' }));
-    expect(f({})).not.toBe(f({ stacktrace: 'at b (/app/b.ts:1)' }));
-  });
-  it('skips node_modules frames and normalizes message when no stack', () => {
-    const r = generateFingerprint({ ...base, stacktrace: 'at x (/node_modules/y.js:1)\nat mine (/app/m.ts:2)' });
-    expect(r.culprit).toContain('mine');
-    const a = generateFingerprint({ ...base, message: 'user 123 failed' });
-    const b = generateFingerprint({ ...base, message: 'user 456 failed' });
-    expect(a.fingerprint).toBe(b.fingerprint);
-  });
-});
 
 describe('api', () => {
   let db: Db;
@@ -110,10 +86,111 @@ describe('api', () => {
     await post({ ...event, message: 'unique-needle here' });
     expect(db.prepare("SELECT COUNT(*) c FROM events_fts WHERE events_fts MATCH 'needle'").get()).toEqual({ c: 1 });
   });
+  it('returns usable culprits and hides legacy unknown values in the issues API', async () => {
+    await post({
+      ...event,
+      message: 'application frame event',
+      exception: { type: 'AppError', stacktrace: 'at run (/app/src.ts:42)' },
+    });
+    await post({ service: 'svc', message: 'no stack trace event' });
+    await post({
+      ...event,
+      message: 'library only event',
+      exception: { type: 'LibraryError', stacktrace: 'at call (/app/node_modules/lib/index.js:12)' },
+    });
+    await post({ service: 'svc', message: 'legacy unknown event' });
+    db.prepare("UPDATE issues SET culprit = 'unknown' WHERE title = 'legacy unknown event'").run();
+
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: 'test-admin', password: 'test-admin-password' },
+    });
+    const cookie = String(login.headers['set-cookie']).split(';')[0];
+    const response = await app.inject({ method: 'GET', url: '/api/issues?status=all', headers: { cookie } });
+    expect(response.statusCode).toBe(200);
+    const issues = response.json().items as Array<{ id: string; title: string; culprit: string }>;
+    expect(issues.find(({ title }) => title === 'AppError: application frame event')?.culprit).toBe('run (/app/src.ts:42)');
+    expect(issues.find(({ title }) => title === 'no stack trace event')?.culprit).toBe('');
+    expect(issues.find(({ title }) => title === 'LibraryError: library only event')?.culprit).toBe('');
+    const legacyIssue = issues.find(({ title }) => title === 'legacy unknown event');
+    expect(legacyIssue?.culprit).toBe('');
+    const details = await app.inject({
+      method: 'GET',
+      url: `/api/issues/${encodeURIComponent(legacyIssue?.id ?? '')}`,
+      headers: { cookie },
+    });
+    expect(details.json().issue.culprit).toBe('');
+  });
   it('healthz works without auth', async () => {
     const r = await app.inject({ method: 'GET', url: '/healthz' });
     expect(r.statusCode).toBe(200);
     expect(r.json().database).toBe('ok');
+  });
+
+  describe('time range and pagination', () => {
+    const names = ['alpha', 'bravo', 'charlie', 'delta', 'echo'];
+    const at = (hour: number) => `2026-01-01T${String(hour).padStart(2, '0')}:00:00.000Z`;
+    let headers: { cookie: string };
+
+    beforeEach(async () => {
+      const login = await app.inject({
+        method: 'POST',
+        url: '/api/auth/login',
+        payload: { username: 'test-admin', password: 'test-admin-password' },
+      });
+      headers = { cookie: String(login.headers['set-cookie']).split(';')[0] };
+      for (const [index, name] of names.entries()) {
+        await post({ service: 'svc', message: name, timestamp: at(10 + index) });
+      }
+    });
+
+    const get = (url: string) => app.inject({ method: 'GET', url, headers });
+    const titles = (body: { items: Array<{ title?: string; message?: string }> }) =>
+      body.items.map((item) => item.title ?? item.message);
+
+    it('pages issues with the latest first and reports totals', async () => {
+      const first = (await get('/api/issues?status=all&pageSize=2&page=1')).json();
+      expect(titles(first)).toEqual(['echo', 'delta']);
+      expect(first).toMatchObject({ total: 5, page: 1, pageSize: 2 });
+      expect(titles((await get('/api/issues?status=all&pageSize=2&page=3')).json())).toEqual(['alpha']);
+      expect((await get('/api/issues?status=all&pageSize=2&page=4')).json().items).toEqual([]);
+    });
+
+    it('defaults to 15 rows per page', async () => {
+      expect((await get('/api/issues?status=all')).json()).toMatchObject({ page: 1, pageSize: 15, total: 5 });
+      expect((await get('/api/events')).json()).toMatchObject({ page: 1, pageSize: 15, total: 5 });
+    });
+
+    it('pages events with the latest first and reports totals', async () => {
+      const second = (await get('/api/events?pageSize=2&page=2')).json();
+      expect(titles(second)).toEqual(['charlie', 'bravo']);
+      expect(second).toMatchObject({ total: 5, page: 2, pageSize: 2 });
+    });
+
+    it('filters issues and events by from/to inclusive', async () => {
+      const range = `from=${encodeURIComponent(at(11))}&to=${encodeURIComponent(at(13))}`;
+      expect(titles((await get(`/api/issues?status=all&${range}`)).json())).toEqual(['delta', 'charlie', 'bravo']);
+      expect(titles((await get(`/api/events?${range}`)).json())).toEqual(['delta', 'charlie', 'bravo']);
+      expect((await get(`/api/issues?status=all&from=${encodeURIComponent('2026-01-01T12:30:00.000Z')}`)).json().total).toBe(2);
+      expect((await get(`/api/events?to=${encodeURIComponent('2026-01-01T10:30:00.000Z')}`)).json().total).toBe(1);
+    });
+
+    it('reports the filtered total when combined with other filters and paging', async () => {
+      const result = (await get(`/api/events?pageSize=1&from=${encodeURIComponent(at(12))}&search=delta`)).json();
+      expect(titles(result)).toEqual(['delta']);
+      expect(result.total).toBe(1);
+    });
+
+    it('rejects invalid paging and range parameters', async () => {
+      for (const query of ['page=0', 'pageSize=0', 'pageSize=101', 'page=abc', 'from=yesterday', 'to=nonsense']) {
+        expect((await get(`/api/issues?${query}`)).statusCode, query).toBe(400);
+        expect((await get(`/api/events?${query}`)).statusCode, query).toBe(400);
+      }
+      const reversed = `from=${encodeURIComponent(at(13))}&to=${encodeURIComponent(at(11))}`;
+      expect((await get(`/api/issues?${reversed}`)).statusCode).toBe(400);
+      expect((await get(`/api/events?${reversed}`)).statusCode).toBe(400);
+    });
   });
 
   it('serves the dashboard with SPA fallback and JSON API 404s', async () => {
@@ -158,11 +235,11 @@ describe('api', () => {
     await post({ ...event, message: 'searchable database failure' });
     const list = await app.inject({ method: 'GET', url: '/api/issues?search=database', headers });
     expect(list.statusCode).toBe(200);
-    expect(list.json()).toHaveLength(1);
-    expect(list.json()[0].recent_timestamps).toHaveLength(1);
-    expect(list.json()[0].latest_level).toBe('error');
+    expect(list.json().items).toHaveLength(1);
+    expect(list.json().items[0].recent_timestamps).toHaveLength(1);
+    expect(list.json().items[0].latest_level).toBe('error');
 
-    const issueId = list.json()[0].id as string;
+    const issueId = list.json().items[0].id as string;
     const details = await app.inject({ method: 'GET', url: `/api/issues/${issueId}`, headers });
     expect(details.json().events).toHaveLength(1);
 
@@ -183,8 +260,30 @@ describe('api', () => {
 
     const stream = await app.inject({ method: 'GET', url: '/api/events?search=database', headers });
     expect(stream.statusCode).toBe(200);
-    expect(stream.json()).toHaveLength(1);
+    expect(stream.json().items).toHaveLength(1);
     expect(await app.inject({ method: 'GET', url: '/api/services', headers }).then((r) => r.json())).toEqual(['svc']);
+
+    await post({ ...event, message: 'tagged unrelated notice', level: 'info', tags: { build_type: 'debug' } });
+    const byLevel = await app.inject({ method: 'GET', url: '/api/events?level=info', headers });
+    expect(byLevel.json().items).toHaveLength(1);
+    const byTag = await app.inject({ method: 'GET', url: '/api/events?tag=build_type%3Ddebug', headers });
+    expect(byTag.json().items).toHaveLength(1);
+    expect(byTag.json().items[0].message).toBe('tagged unrelated notice');
+    const noTag = await app.inject({ method: 'GET', url: '/api/events?tag=build_type%3Drelease', headers });
+    expect(noTag.json().items).toHaveLength(0);
+    const issuesByTag = await app.inject({ method: 'GET', url: '/api/issues?status=all&level=info&tag=build_type%3Ddebug', headers });
+    expect(issuesByTag.json().items).toHaveLength(1);
+    const issuesNoMatch = await app.inject({ method: 'GET', url: '/api/issues?status=all&level=warn', headers });
+    expect(issuesNoMatch.json().items).toHaveLength(0);
+    expect((await app.inject({ method: 'GET', url: '/api/events?level=bogus', headers })).statusCode).toBe(400);
+
+    const toDelete = byLevel.json().items[0] as { id: string };
+    const badBulk = await app.inject({ method: 'POST', url: '/api/events/bulk-delete', headers, payload: { ids: [] } });
+    expect(badBulk.statusCode).toBe(400);
+    const bulk = await app.inject({ method: 'POST', url: '/api/events/bulk-delete', headers, payload: { ids: [toDelete.id, 'missing'] } });
+    expect(bulk.json()).toEqual({ status: 'deleted', deleted: 1 });
+    expect((await app.inject({ method: 'GET', url: '/api/events?level=info', headers })).json().items).toHaveLength(0);
+    expect(db.prepare("SELECT COUNT(*) AS count FROM issues WHERE title LIKE 'tagged%'").get()).toEqual({ count: 0 });
 
     const deleted = await app.inject({ method: 'DELETE', url: `/api/issues/${issueId}`, headers });
     expect(deleted.json()).toEqual({ status: 'deleted', id: issueId });

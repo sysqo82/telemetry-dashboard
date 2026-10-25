@@ -16,7 +16,7 @@ button, input, select { font: inherit; }
 
 @layer components {
   .filter-select { @apply rounded-lg border border-line bg-zinc-950 px-3 py-2 text-sm capitalize text-zinc-300 outline-none focus:border-sky-500; }
-  .action-button { @apply rounded-md border border-line px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-zinc-600 hover:bg-white/5; }
+  .action-button { @apply rounded-md border border-line px-2.5 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-zinc-600 hover:bg-white/5 disabled:pointer-events-none disabled:opacity-40; }
   .action-button.danger { @apply border-red-900/60 text-red-300 hover:bg-red-950/40; }
   .nav-button { @apply rounded-md px-3 py-1.5 text-sm text-zinc-400 hover:text-zinc-100; }
   .nav-button.selected { @apply bg-zinc-800 text-zinc-100; }

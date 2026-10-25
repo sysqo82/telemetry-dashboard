@@ -4,10 +4,30 @@ import { z } from 'zod';
 import type { Db } from '../db/index.js';
 import { hashKey } from './events.js';
 
+// tag filter format: key=value
+const TAG_FILTER = /^[^=]+=.+$/;
+
+const levelSchema = z.enum(['debug', 'info', 'warn', 'error', 'fatal']);
+const sharedFilters = {
+  search: z.string().trim().max(200).optional(),
+  level: levelSchema.optional(),
+  tag: z.string().trim().regex(TAG_FILTER).max(300).optional(),
+  from: z.string().datetime({ offset: true }).optional(),
+  to: z.string().datetime({ offset: true }).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(15),
+};
+const validRange = (value: { from?: string; to?: string }) =>
+  !value.from || !value.to || Date.parse(value.from) <= Date.parse(value.to);
+
 const listQuerySchema = z.object({
   status: z.enum(['all', 'unresolved', 'resolved', 'ignored']).default('unresolved'),
   service: z.string().max(200).optional(),
-  search: z.string().trim().max(200).optional(),
+  ...sharedFilters,
+}).refine(validRange);
+const eventsQuerySchema = z.object(sharedFilters).refine(validRange);
+const bulkDeleteSchema = z.object({
+  ids: z.array(z.string().min(1)).min(1).max(500),
 });
 const statusBodySchema = z.object({
   status: z.enum(['unresolved', 'resolved', 'ignored']),
@@ -15,6 +35,10 @@ const statusBodySchema = z.object({
 
 interface TimestampRow {
   recent_timestamps: string | null;
+}
+
+function normalizeLegacyCulprit<T extends { culprit: string | null }>(issue: T): T {
+  return issue.culprit === 'unknown' ? { ...issue, culprit: '' } : issue;
 }
 
 function addTimestampArrays<T extends TimestampRow>(rows: T[]) {
@@ -30,6 +54,43 @@ function toFtsQuery(search: string): string {
     .join(' AND ');
 }
 
+function buildEventFilter(ftsQuery: string, level?: string, tag?: string, from?: string, to?: string) {
+  const params: Record<string, string> = {};
+  const conditions: string[] = [];
+  let join = '';
+  if (ftsQuery) {
+    join = 'JOIN events_fts ON events_fts.rowid = e.rowid';
+    conditions.push('events_fts MATCH @search');
+    params.search = ftsQuery;
+  }
+  if (level) {
+    conditions.push('e.level = @level');
+    params.level = level;
+  }
+  if (tag) {
+    const separator = tag.indexOf('=');
+    conditions.push("json_extract(e.tags, '$.' || json_quote(@tagKey)) = @tagValue");
+    params.tagKey = tag.slice(0, separator).trim();
+    params.tagValue = tag.slice(separator + 1).trim();
+  }
+  if (from) {
+    conditions.push('e.created_at >= @from');
+    params.from = new Date(from).toISOString();
+  }
+  if (to) {
+    conditions.push('e.created_at <= @to');
+    params.to = new Date(to).toISOString();
+  }
+  return {
+    active: conditions.length > 0,
+    join,
+    where: conditions.map((condition) => `AND ${condition}`).join(' '),
+    params,
+  };
+}
+
+const emptyPage = (page: number, pageSize: number) => ({ items: [], total: 0, page, pageSize });
+
 export function managementRoutes(
   app: FastifyInstance,
   db: Db,
@@ -41,44 +102,50 @@ export function managementRoutes(
       return reply.status(400).send({ error: 'Invalid query parameters' });
     }
 
-    const { status, service, search } = parsed.data;
+    const { status, service, search, level, tag, from, to, page, pageSize } = parsed.data;
     const statusFilter = status === 'all' ? null : status;
     const ftsQuery = search ? toFtsQuery(search) : '';
-    if (search && !ftsQuery) return [];
+    if (search && !ftsQuery) return emptyPage(page, pageSize);
 
-    const query = ftsQuery
-      ? db.prepare(`
-          SELECT i.*,
-            (SELECT level FROM events WHERE issue_id = i.id ORDER BY created_at DESC LIMIT 1) AS latest_level,
-            (SELECT json_group_array(created_at) FROM (
-              SELECT created_at FROM events WHERE issue_id = i.id
-              ORDER BY created_at DESC LIMIT 20
-            )) AS recent_timestamps
-          FROM issues i
-          WHERE (@status IS NULL OR i.status = @status)
-            AND (@service IS NULL OR i.service = @service)
-            AND EXISTS (
-              SELECT 1
-              FROM events e
-              JOIN events_fts ON events_fts.rowid = e.rowid
-              WHERE e.issue_id = i.id AND events_fts MATCH @search
-            )
-          ORDER BY i.last_seen_at DESC
-        `).all({ status: statusFilter, service: service || null, search: ftsQuery })
-      : db.prepare(`
-          SELECT i.*,
-            (SELECT level FROM events WHERE issue_id = i.id ORDER BY created_at DESC LIMIT 1) AS latest_level,
-            (SELECT json_group_array(created_at) FROM (
-              SELECT created_at FROM events WHERE issue_id = i.id
-              ORDER BY created_at DESC LIMIT 24
-            )) AS recent_timestamps
-          FROM issues i
-          WHERE (@status IS NULL OR i.status = @status)
-            AND (@service IS NULL OR i.service = @service)
-          ORDER BY i.last_seen_at DESC
-        `).all({ status: statusFilter, service: service || null });
+    // Issue-level time filtering uses last_seen_at; level/tag/search match against events
+    const filter = buildEventFilter(ftsQuery, undefined, tag);
+    const eventExists = filter.active
+      ? `AND EXISTS (SELECT 1 FROM events e ${filter.join} WHERE e.issue_id = i.id ${filter.where})`
+      : '';
+    const where = `
+      WHERE (@status IS NULL OR i.status = @status)
+        AND (@service IS NULL OR i.service = @service)
+        AND (@level IS NULL OR (SELECT level FROM events WHERE issue_id = i.id ORDER BY created_at DESC LIMIT 1) = @level)
+        AND (@from IS NULL OR i.last_seen_at >= @from)
+        AND (@to IS NULL OR i.last_seen_at <= @to)
+        ${eventExists}
+    `;
+    const params = {
+      status: statusFilter,
+      service: service || null,
+      level: level ?? null,
+      from: from ? new Date(from).toISOString() : null,
+      to: to ? new Date(to).toISOString() : null,
+      ...filter.params,
+    };
 
-    return addTimestampArrays(query as (TimestampRow & Record<string, unknown>)[]);
+    const { total } = db.prepare(`SELECT COUNT(*) AS total FROM issues i ${where}`).get(params) as { total: number };
+    const rows = db.prepare(`
+      SELECT i.*,
+        (SELECT level FROM events WHERE issue_id = i.id ORDER BY created_at DESC LIMIT 1) AS latest_level,
+        (SELECT json_group_array(created_at) FROM (
+          SELECT created_at FROM events WHERE issue_id = i.id
+          ORDER BY created_at DESC LIMIT ${ftsQuery ? 20 : 24}
+        )) AS recent_timestamps
+      FROM issues i
+      ${where}
+      ORDER BY i.last_seen_at DESC, i.id
+      LIMIT @limit OFFSET @offset
+    `).all({ ...params, limit: pageSize, offset: (page - 1) * pageSize });
+
+    const items = addTimestampArrays(rows as (TimestampRow & { culprit: string | null } & Record<string, unknown>)[])
+      .map(normalizeLegacyCulprit);
+    return { items, total, page, pageSize };
   });
 
   app.get('/api/keys', { preHandler: authenticate }, async () => db.prepare(
@@ -111,43 +178,41 @@ export function managementRoutes(
   ).map(({ service }) => service));
 
   app.get('/api/events', { preHandler: authenticate }, async (request, reply) => {
-    const parsed = z.object({ search: z.string().trim().max(200).optional() }).safeParse(request.query);
+    const parsed = eventsQuerySchema.safeParse(request.query);
     if (!parsed.success) {
       return reply.status(400).send({ error: 'Invalid query parameters' });
     }
 
-    const search = parsed.data.search ? toFtsQuery(parsed.data.search) : '';
-    if (parsed.data.search && !search) return [];
-    if (search) {
-      return db.prepare(`
-        SELECT e.*, i.title AS issue_title, i.status AS issue_status
-        FROM events e
-        LEFT JOIN issues i ON i.id = e.issue_id
-        JOIN events_fts ON events_fts.rowid = e.rowid
-        WHERE events_fts MATCH ?
-        ORDER BY e.created_at DESC
-        LIMIT 100
-      `).all(search);
-    }
+    const { search: rawSearch, level, tag, from, to, page, pageSize } = parsed.data;
+    const search = rawSearch ? toFtsQuery(rawSearch) : '';
+    if (rawSearch && !search) return emptyPage(page, pageSize);
+    const filter = buildEventFilter(search, level, tag, from, to);
 
-    return db.prepare(`
+    const { total } = db.prepare(`
+      SELECT COUNT(*) AS total FROM events e ${filter.join} WHERE 1 = 1 ${filter.where}
+    `).get(filter.params) as { total: number };
+    const items = db.prepare(`
       SELECT e.*, i.title AS issue_title, i.status AS issue_status
       FROM events e
       LEFT JOIN issues i ON i.id = e.issue_id
-      ORDER BY e.created_at DESC
-      LIMIT 100
-    `).all();
+      ${filter.join}
+      WHERE 1 = 1 ${filter.where}
+      ORDER BY e.created_at DESC, e.id
+      LIMIT @limit OFFSET @offset
+    `).all({ ...filter.params, limit: pageSize, offset: (page - 1) * pageSize });
+    return { items, total, page, pageSize };
   });
 
   app.get('/api/issues/:id', { preHandler: authenticate }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const issue = db.prepare('SELECT * FROM issues WHERE id = ?').get(id);
+    const issue = db.prepare('SELECT * FROM issues WHERE id = ?').get(id) as
+      ({ culprit: string | null } & Record<string, unknown>) | undefined;
     if (!issue) return reply.status(404).send({ error: 'Issue not found' });
 
     const events = db.prepare(`
       SELECT * FROM events WHERE issue_id = ? ORDER BY created_at DESC LIMIT 50
     `).all(id);
-    return { issue, events };
+    return { issue: normalizeLegacyCulprit(issue), events };
   });
 
   app.patch('/api/issues/:id/status', { preHandler: authenticate }, async (request, reply) => {
@@ -164,5 +229,48 @@ export function managementRoutes(
     const { id } = request.params as { id: string };
     db.prepare('DELETE FROM issues WHERE id = ?').run(id);
     return { status: 'deleted', id };
+  });
+
+  app.post('/api/issues/bulk-delete', { preHandler: authenticate }, async (request, reply) => {
+    const parsed = bulkDeleteSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: 'Invalid ids' });
+
+    const remove = db.prepare('DELETE FROM issues WHERE id = ?');
+    const deleted = db.transaction((ids: string[]) => ids.reduce((count, id) => count + remove.run(id).changes, 0))(parsed.data.ids);
+    return { status: 'deleted', deleted };
+  });
+
+  app.post('/api/events/bulk-delete', { preHandler: authenticate }, async (request, reply) => {
+    const parsed = bulkDeleteSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: 'Invalid ids' });
+
+    const findIssue = db.prepare('SELECT issue_id FROM events WHERE id = ?');
+    const removeEvent = db.prepare('DELETE FROM events WHERE id = ?');
+    const syncIssue = db.prepare(`
+      UPDATE issues SET
+        occurrence_count = (SELECT COUNT(*) FROM events WHERE issue_id = issues.id),
+        last_seen_at = (SELECT MAX(created_at) FROM events WHERE issue_id = issues.id)
+      WHERE id = ? AND EXISTS (SELECT 1 FROM events WHERE issue_id = issues.id)
+    `);
+    const removeEmptyIssue = db.prepare(
+      'DELETE FROM issues WHERE id = ? AND NOT EXISTS (SELECT 1 FROM events WHERE issue_id = issues.id)',
+    );
+
+    const deleted = db.transaction((ids: string[]) => {
+      const affected = new Set<string>();
+      let count = 0;
+      for (const id of ids) {
+        const row = findIssue.get(id) as { issue_id: string } | undefined;
+        if (!row) continue;
+        count += removeEvent.run(id).changes;
+        affected.add(row.issue_id);
+      }
+      for (const issueId of affected) {
+        syncIssue.run(issueId);
+        removeEmptyIssue.run(issueId);
+      }
+      return count;
+    })(parsed.data.ids);
+    return { status: 'deleted', deleted };
   });
 }

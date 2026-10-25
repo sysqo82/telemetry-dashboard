@@ -84,7 +84,7 @@ export function createIngestor(db: Db, onAlert?: (alert: IngestedAlert) => void)
     const title = type
       ? `${type}: ${e.exception?.value ?? e.message}`.slice(0, 200)
       : e.message.slice(0, 200);
-    run(e, fingerprint, culprit, title, e.timestamp ?? new Date().toISOString());
+    run(e, fingerprint, culprit, title, new Date(e.timestamp ?? Date.now()).toISOString());
     if (onAlert && (e.level === 'error' || e.level === 'fatal')) {
       onAlert({
         service: e.service,
