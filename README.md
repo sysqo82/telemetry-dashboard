@@ -132,7 +132,7 @@ Client helpers: [Node.js](examples/node.mjs), [Python](examples/python.py), [C#]
 | `GET /api/auth/session` | Session check |
 | `GET /api/issues` | `status`, `service`, `search` (FTS5), `level` (latest event), `tag` (`key=value`), `from`/`to` (ISO, matched against last seen), `page`, `pageSize` (default 15, max 100) → `{ items, total, page, pageSize }`, latest first |
 | `GET /api/issues/:id` | Issue + latest 50 events |
-| `PATCH /api/issues/:id/status` | `{ "status": "unresolved|resolved|ignored" }` |
+| `PATCH /api/issues/:id/status` | `{ "status": "unresolved\|resolved\|ignored" }` |
 | `DELETE /api/issues/:id` | Delete issue and events |
 | `GET /api/events` | `search`, `level`, `tag` (`key=value`), `from`/`to` (ISO), `page`, `pageSize` (default 15, max 100) → `{ items, total, page, pageSize }`, latest first |
 | `POST /api/issues/bulk-delete`, `POST /api/events/bulk-delete` | `{ "ids": [...] }` (max 500) |
