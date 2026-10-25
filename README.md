@@ -2,7 +2,7 @@
 
 Self-hosted, Sentry-style error collector for personal projects and homelabs. Apps report errors with a plain HTTP POST (no SDK); identical errors are grouped into **issues**, stored in embedded SQLite (WAL + FTS5), triaged in a web dashboard, and optionally pushed to ntfy / Discord / a generic webhook.
 
-Live instance: https://telemetry.lockpc.co.uk/
+Live instance: https://{your-domain}/
 
 ## Architecture
 
@@ -130,11 +130,12 @@ Client helpers: [Node.js](examples/node.mjs), [Python](examples/python.py), [C#]
 | `POST /api/auth/login` | `{ "username", "password" }` → sets session cookie |
 | `POST /api/auth/logout` | Ends the session |
 | `GET /api/auth/session` | Session check |
-| `GET /api/issues` | `status`, `service`, `search` (FTS5) |
+| `GET /api/issues` | `status`, `service`, `search` (FTS5), `level` (latest event), `tag` (`key=value`), `from`/`to` (ISO, matched against last seen), `page`, `pageSize` (default 15, max 100) → `{ items, total, page, pageSize }`, latest first |
 | `GET /api/issues/:id` | Issue + latest 50 events |
 | `PATCH /api/issues/:id/status` | `{ "status": "unresolved|resolved|ignored" }` |
 | `DELETE /api/issues/:id` | Delete issue and events |
-| `GET /api/events` | Latest 100 events, optional `search` |
+| `GET /api/events` | `search`, `level`, `tag` (`key=value`), `from`/`to` (ISO), `page`, `pageSize` (default 15, max 100) → `{ items, total, page, pageSize }`, latest first |
+| `POST /api/issues/bulk-delete`, `POST /api/events/bulk-delete` | `{ "ids": [...] }` (max 500) |
 | `GET /api/services` | Distinct service names |
 | `GET /api/keys` | List keys (prefix only) |
 | `POST /api/keys` | `{ "service" }` → returns the full key once |

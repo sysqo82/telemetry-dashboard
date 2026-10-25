@@ -48,7 +48,9 @@ export function IssueDetailModal({ issue, onClose, onDeleted }: IssueDetailModal
           <div className="min-w-0">
             <p className="text-xs uppercase tracking-widest text-sky-400">{issue.service} · {issue.status}</p>
             <h2 id="issue-title" className="mt-2 break-words text-lg font-semibold">{issue.title}</h2>
-            <p className="mt-1 break-all font-mono text-xs text-zinc-500">{issue.culprit ?? issue.id}</p>
+            {issue.culprit && issue.culprit !== 'unknown' && (
+              <p className="mt-1 break-all font-mono text-xs text-zinc-500">{issue.culprit}</p>
+            )}
           </div>
           <button aria-label="Close details" className="rounded-md px-2 py-1 text-zinc-400 hover:bg-white/10" onClick={onClose}>✕</button>
         </header>

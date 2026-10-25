@@ -29,7 +29,7 @@ function topAppFrame(stacktrace?: string): string | undefined {
 export function generateFingerprint(input: FingerprintInput): { fingerprint: string; culprit: string } {
   const frame = topAppFrame(input.stacktrace);
   // culprit keeps the real line number for display; the fingerprint uses the normalized form
-  const culprit = frame ? frame.replace(/^at\s+/, '').trim() : 'unknown';
+  const culprit = frame ? frame.replace(/^at\s+/, '').trim() : '';
   const type = input.exceptionType || 'Error';
   const discriminator = normalize(frame ?? input.message);
   const raw = `${input.service.toLowerCase()}::${type}::${discriminator}`;
