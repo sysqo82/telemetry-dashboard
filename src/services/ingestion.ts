@@ -14,7 +14,7 @@ export const eventSchema = z.object({
       value: z.string().optional(),
       stacktrace: z.string().optional(),
     })
-    .optional(),
+    .nullish(),
   tags: z.record(z.string()).optional(),
   metadata: z.record(z.any()).optional(),
   timestamp: z.string().datetime({ offset: true }).optional(),

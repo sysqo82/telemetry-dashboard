@@ -36,6 +36,11 @@ describe('api', () => {
     expect((await post(event, '')).statusCode).toBe(401);
     expect((await post(event, 'wrong')).statusCode).toBe(401);
   });
+  it('accepts null, missing, and object exception', async () => {
+    expect((await post({ service: 'svc', message: 'a', exception: null })).statusCode).toBe(202);
+    expect((await post({ service: 'svc', message: 'b' })).statusCode).toBe(202);
+    expect((await post(event)).statusCode).toBe(202);
+  });
   it('rejects invalid payload', async () => {
     expect((await post({ service: 'x' })).statusCode).toBe(400);
   });
