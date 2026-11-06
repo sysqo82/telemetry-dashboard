@@ -47,7 +47,7 @@ function Login({ onLogin }: { onLogin: () => void }) {
 export default function App() {
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [view, setView] = useState<'issues' | 'live' | 'keys'>('issues');
-  const [selected, setSelected] = useState<Issue | null>(null);
+  const [selected, setSelected] = useState<{ issue: Issue; filters: { tag?: string; search?: string } } | null>(null);
   const [issuesRefresh, setIssuesRefresh] = useState(0);
   const [notice, setNotice] = useState('');
   const handleUnauthorized = useCallback(() => setAuthenticated(false), []);
@@ -117,11 +117,11 @@ export default function App() {
           <p className="mt-1 text-sm text-zinc-500">{heading.text}</p>
         </div>
         {notice && <p role="alert" className="mb-4 rounded-lg bg-red-950/40 p-3 text-sm text-red-300">{notice}</p>}
-        {view === 'issues' && <IssuesTable key={issuesRefresh} onSelect={setSelected} onUnauthorized={handleUnauthorized} />}
+        {view === 'issues' && <IssuesTable key={issuesRefresh} onSelect={(issue, filters) => setSelected({ issue, filters })} onUnauthorized={handleUnauthorized} />}
         {view === 'live' && <LiveStream onUnauthorized={handleUnauthorized} />}
         {view === 'keys' && <ApiKeys onUnauthorized={handleUnauthorized} />}
       </section>
-      {selected && <IssueDetailModal issue={selected} onClose={() => setSelected(null)} onDeleted={() => {
+      {selected && <IssueDetailModal issue={selected.issue} filters={selected.filters} onClose={() => setSelected(null)} onDeleted={() => {
         setSelected(null);
         setIssuesRefresh((current) => current + 1);
       }} />}

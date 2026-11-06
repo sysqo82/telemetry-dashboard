@@ -32,6 +32,16 @@ const bulkDeleteSchema = z.object({
 const statusBodySchema = z.object({
   status: z.enum(['unresolved', 'resolved', 'ignored']),
 });
+const suggestionsQuerySchema = z.object({
+  q: z.string().max(300).default(''),
+  view: z.enum(['issues', 'events']).default('events'),
+});
+
+const attributeValue = `CASE attr.type
+  WHEN 'true' THEN 'true'
+  WHEN 'false' THEN 'false'
+  ELSE CAST(attr.value AS TEXT)
+END`;
 
 interface TimestampRow {
   recent_timestamps: string | null;
@@ -69,7 +79,12 @@ function buildEventFilter(ftsQuery: string, level?: string, tag?: string, from?:
   }
   if (tag) {
     const separator = tag.indexOf('=');
-    conditions.push("json_extract(e.tags, '$.' || json_quote(@tagKey)) = @tagValue");
+    const matchesAttribute = (column: 'tags' | 'metadata') => `EXISTS (
+      SELECT 1 FROM json_each(e.${column}) attr
+      WHERE attr.key = @tagKey AND attr.type IN ('text', 'integer', 'real', 'true', 'false')
+        AND ${attributeValue} = @tagValue
+    )`;
+    conditions.push(`(${matchesAttribute('tags')} OR ${matchesAttribute('metadata')})`);
     params.tagKey = tag.slice(0, separator).trim();
     params.tagValue = tag.slice(separator + 1).trim();
   }
@@ -110,7 +125,7 @@ export function managementRoutes(
     // Issue-level time filtering uses last_seen_at; level/tag/search match against events
     const filter = buildEventFilter(ftsQuery, undefined, tag);
     const eventExists = filter.active
-      ? `AND EXISTS (SELECT 1 FROM events e ${filter.join} WHERE e.issue_id = i.id ${filter.where})`
+      ? `AND i.id IN (SELECT e.issue_id FROM events e ${filter.join} WHERE 1 = 1 ${filter.where})`
       : '';
     const where = `
       WHERE (@status IS NULL OR i.status = @status)
@@ -177,6 +192,37 @@ export function managementRoutes(
     db.prepare('SELECT DISTINCT service FROM issues ORDER BY service').all() as { service: string }[]
   ).map(({ service }) => service));
 
+  app.get('/api/filter-suggestions', { preHandler: authenticate }, async (request, reply) => {
+    const parsed = suggestionsQuerySchema.safeParse(request.query);
+    if (!parsed.success) return reply.status(400).send({ error: 'Invalid query parameters' });
+
+    const rows = db.prepare(`
+      SELECT suggestion, group_concat(DISTINCT issue_status) AS statuses FROM (
+      SELECT attr.key || '=' || ${attributeValue} AS suggestion, i.status AS issue_status
+      FROM events e JOIN issues i ON i.id = e.issue_id, json_each(e.tags) attr
+      WHERE attr.type IN ('text', 'integer', 'real', 'true', 'false')
+        AND attr.key <> '' AND instr(attr.key, '=') = 0
+        AND trim(attr.key) = attr.key AND trim(${attributeValue}) = ${attributeValue}
+        AND ${attributeValue} <> ''
+        AND length(attr.key || '=' || ${attributeValue}) <= 300
+        AND instr(lower(attr.key || '=' || ${attributeValue}), lower(@query)) > 0
+      UNION ALL
+      SELECT attr.key || '=' || ${attributeValue} AS suggestion, i.status AS issue_status
+      FROM events e JOIN issues i ON i.id = e.issue_id, json_each(e.metadata) attr
+      WHERE attr.type IN ('text', 'integer', 'real', 'true', 'false')
+        AND attr.key <> '' AND instr(attr.key, '=') = 0
+        AND trim(attr.key) = attr.key AND trim(${attributeValue}) = ${attributeValue}
+        AND ${attributeValue} <> ''
+        AND length(attr.key || '=' || ${attributeValue}) <= 300
+        AND instr(lower(attr.key || '=' || ${attributeValue}), lower(@query)) > 0
+      ) GROUP BY suggestion
+      LIMIT 50
+    `).all({ query: parsed.data.q.trim() }) as { suggestion: string; statuses: string }[];
+    return parsed.data.view === 'issues'
+      ? rows.map(({ suggestion, statuses }) => ({ value: suggestion, statuses: statuses.split(',') }))
+      : rows.map(({ suggestion }) => suggestion);
+  });
+
   app.get('/api/events', { preHandler: authenticate }, async (request, reply) => {
     const parsed = eventsQuerySchema.safeParse(request.query);
     if (!parsed.success) {
@@ -205,13 +251,20 @@ export function managementRoutes(
 
   app.get('/api/issues/:id', { preHandler: authenticate }, async (request, reply) => {
     const { id } = request.params as { id: string };
+    const parsed = z.object({ tag: sharedFilters.tag, search: sharedFilters.search }).safeParse(request.query);
+    if (!parsed.success) return reply.status(400).send({ error: 'Invalid query parameters' });
     const issue = db.prepare('SELECT * FROM issues WHERE id = ?').get(id) as
       ({ culprit: string | null } & Record<string, unknown>) | undefined;
     if (!issue) return reply.status(404).send({ error: 'Issue not found' });
 
+    const ftsQuery = parsed.data.search ? toFtsQuery(parsed.data.search) : '';
+    if (parsed.data.search && !ftsQuery) return { issue: normalizeLegacyCulprit(issue), events: [] };
+    const filter = buildEventFilter(ftsQuery, undefined, parsed.data.tag);
     const events = db.prepare(`
-      SELECT * FROM events WHERE issue_id = ? ORDER BY created_at DESC LIMIT 50
-    `).all(id);
+      SELECT e.* FROM events e ${filter.join}
+      WHERE e.issue_id = @id ${filter.where}
+      ORDER BY e.created_at DESC, e.id LIMIT 50
+    `).all({ id, ...filter.params });
     return { issue: normalizeLegacyCulprit(issue), events };
   });
 
