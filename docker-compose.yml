@@ -14,7 +14,7 @@ services:
       DB_PATH: /data/telemetry.sqlite
       ADMIN_USERNAME: ${ADMIN_USERNAME:?Set ADMIN_USERNAME in .env}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
-      RETENTION_DAYS: ${RETENTION_DAYS:-30}
+      RETENTION_DAYS: ${RETENTION_DAYS:-7}
       ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-}
     volumes:
       - telemetry-data:/data

@@ -7,7 +7,7 @@ const schema = z.object({
   ADMIN_PASSWORD: z.string().min(1, 'ADMIN_PASSWORD is required'),
   NODE_ENV: z.string().default('development'),
   DB_PATH: z.string().default('./data/telemetry.sqlite'),
-  RETENTION_DAYS: z.coerce.number().int().positive().default(30),
+  RETENTION_DAYS: z.coerce.number().int().positive().default(7),
   ALERT_WEBHOOK_URL: z.string().url().optional().or(z.literal('')),
 });
 
