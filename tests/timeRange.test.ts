@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { applyTimeRange } from '../frontend/src/timeRange.js';
+import { applyTimeRange, customRangeError } from '../frontend/src/timeRange.js';
 
 const NOW = Date.parse('2026-01-01T12:00:00.000Z');
 const build = (range: Parameters<typeof applyTimeRange>[1]) => {
@@ -9,6 +9,14 @@ const build = (range: Parameters<typeof applyTimeRange>[1]) => {
 };
 
 describe('time range params', () => {
+  it('validates custom ranges while allowing open-ended and equal bounds', () => {
+    expect(customRangeError('', '')).toBe('Enter a start or end date.');
+    expect(customRangeError('invalid', '')).toBe('Enter valid dates.');
+    expect(customRangeError('2026-01-02T00:00', '2026-01-01T00:00')).toBe('The start must be before the end.');
+    expect(customRangeError('2026-01-01T00:00', '')).toBeUndefined();
+    expect(customRangeError('', '2026-01-01T00:00')).toBeUndefined();
+    expect(customRangeError('2026-01-01T00:00', '2026-01-01T00:00')).toBeUndefined();
+  });
   it('adds nothing for all time', () => {
     expect(build({ preset: 'all', from: '', to: '' })).toEqual({});
   });

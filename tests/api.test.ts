@@ -32,6 +32,130 @@ describe('api', () => {
     db.close();
   });
 
+  it('filters tags or scalar metadata and suggests stored attributes', async () => {
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: 'test-admin', password: 'test-admin-password' },
+    });
+    const cookie = String(login.headers['set-cookie']).split(';')[0];
+    const headers = { cookie };
+    expect((await app.inject({ method: 'GET', url: '/api/filter-suggestions' })).statusCode).toBe(401);
+
+    await post({
+      service: 'svc',
+      message: 'first attribute event',
+      tags: { build_type: 'release', shared: 'tag-value' },
+      metadata: { os_arch: 'amd64', version: '1.3.9', shared: 'metadata-value', cores: 4, enabled: true, nested: { value: 'hidden' } },
+    });
+    await post({
+      service: 'svc',
+      message: 'second attribute event',
+      tags: { build_type: 'release' },
+      metadata: { os_arch: 'arm64', note: 'a=b' },
+    });
+
+    for (const endpoint of ['/api/issues?status=all', '/api/events?']) {
+      for (const [attribute, count] of [
+        ['build_type=release', 2],
+        ['os_arch=amd64', 1],
+        ['version=1.3.9', 1],
+        ['shared=tag-value', 1],
+        ['shared=metadata-value', 1],
+        ['cores=4', 1],
+        ['enabled=true', 1],
+        ['note=a=b', 1],
+        ['os_arch=missing', 0],
+        ['nested=hidden', 0],
+      ] as const) {
+        const separator = endpoint.endsWith('?') ? '' : '&';
+        const response = await app.inject({ method: 'GET', url: `${endpoint}${separator}tag=${encodeURIComponent(attribute)}`, headers });
+        expect(response.statusCode).toBe(200);
+        expect(response.json().items, `${endpoint} ${attribute}`).toHaveLength(count);
+      }
+    }
+
+    const suggestions = (query: string) => app.inject({
+      method: 'GET',
+      url: `/api/filter-suggestions?q=${encodeURIComponent(query)}`,
+      headers,
+    });
+    expect((await suggestions('')).json()).toEqual(expect.arrayContaining([
+      'build_type=release', 'os_arch=amd64', 'os_arch=arm64', 'version=1.3.9',
+      'shared=tag-value', 'shared=metadata-value', 'cores=4', 'enabled=true', 'note=a=b',
+    ]));
+    expect((await suggestions('OS_ARCH=am')).json()).toEqual(['os_arch=amd64']);
+    expect((await suggestions('nested')).json()).toEqual([]);
+    expect((await suggestions('x'.repeat(301))).statusCode).toBe(400);
+  });
+
+  it('labels issue suggestions with all matching statuses and preserves other filters for status counts', async () => {
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: 'test-admin', password: 'test-admin-password' },
+    });
+    const headers = { cookie: String(login.headers['set-cookie']).split(';')[0] };
+    const first = await post({ service: 'svc', message: 'ignored client', level: 'info', metadata: { client_id: 'same' } });
+    const second = await post({ service: 'svc', message: 'resolved client', level: 'error', metadata: { client_id: 'same' } });
+    await post({ service: 'svc', message: 'unresolved client', level: 'warn', metadata: { client_id: 'other' } });
+    await post({ service: 'svc', message: 'unresolved shared client', level: 'warn', metadata: { client_id: 'same' } });
+    const firstId = first.json().issueId as string;
+    const secondId = second.json().issueId as string;
+    for (const [id, status] of [[firstId, 'ignored'], [secondId, 'resolved']] as const) {
+      expect((await app.inject({ method: 'PATCH', url: `/api/issues/${id}/status`, headers, payload: { status } })).statusCode).toBe(200);
+    }
+    const suggestions = await app.inject({ method: 'GET', url: '/api/filter-suggestions?view=issues&q=client_id', headers });
+    expect(suggestions.statusCode).toBe(200);
+    expect(suggestions.json()).toEqual(expect.arrayContaining([
+      { value: 'client_id=same', statuses: expect.arrayContaining(['ignored', 'resolved', 'unresolved']) },
+      { value: 'client_id=other', statuses: ['unresolved'] },
+    ]));
+    const query = 'tag=client_id%3Dsame&level=info&service=svc';
+    for (const [status, total] of [['unresolved', 0], ['ignored', 1], ['resolved', 0]] as const) {
+      const response = await app.inject({ method: 'GET', url: `/api/issues?status=${status}&${query}&page=1&pageSize=1`, headers });
+      expect(response.statusCode).toBe(200);
+      expect(response.json().total).toBe(total);
+    }
+  });
+
+  it('shows the latest matching issue events rather than filtering the latest 50', async () => {
+    const login = await app.inject({
+      method: 'POST',
+      url: '/api/auth/login',
+      payload: { username: 'test-admin', password: 'test-admin-password' },
+    });
+    const headers = { cookie: String(login.headers['set-cookie']).split(';')[0] };
+    const first = await post({
+      service: 'svc', message: 'same grouped event', timestamp: '2026-01-01T00:00:00Z',
+      tags: { build_type: 'debug' }, metadata: { arch: 'amd64' },
+    });
+    const id = first.json().issueId as string;
+    for (let i = 0; i < 51; i++) {
+      await post({
+        service: 'svc', message: 'same grouped event',
+        timestamp: new Date(Date.parse('2026-01-02T00:00:00Z') + i * 1000).toISOString(),
+        tags: { build_type: 'release' },
+      });
+    }
+
+    const getDetails = (query = '') => app.inject({ method: 'GET', url: `/api/issues/${id}${query}`, headers });
+    const all = await getDetails();
+    expect(all.json().events).toHaveLength(50);
+    expect(all.json().events.every((item: { tags: string }) => JSON.parse(item.tags).build_type === 'release')).toBe(true);
+
+    const list = await app.inject({ method: 'GET', url: '/api/issues?tag=build_type%3Ddebug&search=grouped', headers });
+    expect(list.json().items.map((item: { id: string }) => item.id)).toContain(id);
+    const filtered = await getDetails('?tag=build_type%3Ddebug&search=grouped');
+    expect(filtered.statusCode).toBe(200);
+    expect(filtered.json().events).toHaveLength(1);
+    expect(JSON.parse(filtered.json().events[0].tags)).toEqual({ build_type: 'debug' });
+    expect((await getDetails('?tag=arch%3Damd64')).json().events).toHaveLength(1);
+    expect((await getDetails('?tag=build_type%3Ddebug&search=missing')).json().events).toHaveLength(0);
+    expect((await getDetails('?tag=invalid')).statusCode).toBe(400);
+    expect((await app.inject({ method: 'GET', url: `/api/issues/${id}?tag=build_type%3Ddebug` })).statusCode).toBe(401);
+  });
+
   it('rejects missing/wrong key', async () => {
     expect((await post(event, '')).statusCode).toBe(401);
     expect((await post(event, 'wrong')).statusCode).toBe(401);

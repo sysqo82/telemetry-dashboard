@@ -26,6 +26,13 @@ function toIso(localValue: string): string | undefined {
   return Number.isNaN(time) ? undefined : new Date(time).toISOString();
 }
 
+export function customRangeError(from: string, to: string): string | undefined {
+  if (!from && !to) return 'Enter a start or end date.';
+  if ((from && !toIso(from)) || (to && !toIso(to))) return 'Enter valid dates.';
+  if (from && to && Date.parse(from) > Date.parse(to)) return 'The start must be before the end.';
+  return undefined;
+}
+
 // Presets are relative to the moment of the request so periodic refreshes slide the window.
 export function applyTimeRange(params: URLSearchParams, range: TimeRange, now = Date.now()) {
   if (range.preset === 'custom') {

@@ -4,6 +4,7 @@ import type { EventRecord, Issue } from '../types';
 
 interface IssueDetailModalProps {
   issue: Issue;
+  filters: { tag?: string; search?: string };
   onClose: () => void;
   onDeleted: () => void;
 }
@@ -17,17 +18,29 @@ function prettyJson(value: string | null) {
   }
 }
 
-export function IssueDetailModal({ issue, onClose, onDeleted }: IssueDetailModalProps) {
+export function IssueDetailModal({ issue, filters, onClose, onDeleted }: IssueDetailModalProps) {
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api<{ issue: Issue; events: EventRecord[] }>(`/api/issues/${encodeURIComponent(issue.id)}`)
+    const params = new URLSearchParams();
+    if (filters.tag) params.set('tag', filters.tag);
+    if (filters.search) params.set('search', filters.search);
+    const query = params.toString();
+    api<{ issue: Issue; events: EventRecord[] }>(`/api/issues/${encodeURIComponent(issue.id)}${query ? `?${query}` : ''}`)
       .then((result) => setEvents(result.events))
       .catch((cause: unknown) => setError(cause instanceof Error ? cause.message : 'Unable to load issue details'))
       .finally(() => setLoading(false));
-  }, [issue.id]);
+  }, [issue.id, filters.tag, filters.search]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
 
   async function deleteIssue() {
     if (!window.confirm('Delete this issue and all associated events?')) return;
@@ -55,9 +68,12 @@ export function IssueDetailModal({ issue, onClose, onDeleted }: IssueDetailModal
           <button aria-label="Close details" className="rounded-md px-2 py-1 text-zinc-400 hover:bg-white/10" onClick={onClose}>✕</button>
         </header>
         <div className="space-y-4 p-5">
+          {(filters.tag || filters.search) && (
+            <p className="text-sm text-zinc-400">Showing up to 50 events matching the active {filters.tag && filters.search ? 'search and attribute filters' : filters.tag ? 'attribute filter' : 'search'}.</p>
+          )}
           {error && <p className="rounded-lg bg-red-950/40 p-3 text-sm text-red-300">{error}</p>}
           {loading && <p className="text-sm text-zinc-400">Loading events…</p>}
-          {!loading && events.length === 0 && <p className="text-sm text-zinc-500">No event details.</p>}
+          {!loading && !error && events.length === 0 && <p className="text-sm text-zinc-500">{filters.tag || filters.search ? 'No matching events.' : 'No event details.'}</p>}
           {events.map((event) => {
             const frames = event.stacktrace?.split('\n') ?? [];
             const appFrames = frames.filter((frame) => !frame.includes('node_modules'));
@@ -66,7 +82,7 @@ export function IssueDetailModal({ issue, onClose, onDeleted }: IssueDetailModal
               <article key={event.id} className="rounded-lg border border-line bg-zinc-950/60 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className={`level-tag ${event.level}`}>{event.level}</span>
-                  <time className="text-xs text-zinc-500">{new Date(event.created_at).toLocaleString()}</time>
+                  <time className="text-xs text-zinc-500">{new Date(event.created_at).toLocaleString('en-GB')}</time>
                 </div>
                 <p className="mt-3 whitespace-pre-wrap break-words text-sm text-zinc-200">{event.message}</p>
                 {appFrames.length > 0 && <pre className="mt-3 overflow-x-auto rounded-md bg-black/40 p-3 text-xs leading-5 text-zinc-300">{appFrames.join('\n')}</pre>}

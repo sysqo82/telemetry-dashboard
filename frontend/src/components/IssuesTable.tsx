@@ -1,13 +1,15 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import { applyTimeRange, defaultTimeRange, type TimeRange } from '../timeRange';
 import type { Issue, Paginated } from '../types';
+import { AttributeFilter } from './AttributeFilter';
 import { Pagination } from './Pagination';
+import { SearchFilter } from './SearchFilter';
 import { Sparkline } from './Sparkline';
 import { TimeRangeFilter } from './TimeRangeFilter';
 
 interface IssuesTableProps {
-  onSelect: (issue: Issue) => void;
+  onSelect: (issue: Issue, filters: { tag?: string; search?: string }) => void;
   onUnauthorized: () => void;
 }
 
@@ -28,7 +30,9 @@ export function IssuesTable({ onSelect, onUnauthorized }: IssuesTableProps) {
   const [range, setRange] = useState<TimeRange>(defaultTimeRange);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [otherStatusCounts, setOtherStatusCounts] = useState<{ status: 'resolved' | 'ignored'; count: number }[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const latestRequest = useRef(0);
 
   const resetPage = <T,>(setter: (value: T) => void) => (value: T) => {
     setter(value);
@@ -36,6 +40,7 @@ export function IssuesTable({ onSelect, onUnauthorized }: IssuesTableProps) {
   };
 
   async function loadIssues() {
+    const requestId = ++latestRequest.current;
     setLoading(true);
     setError('');
     const params = new URLSearchParams({ status, page: String(page), pageSize: String(PAGE_SIZE) });
@@ -49,6 +54,20 @@ export function IssuesTable({ onSelect, onUnauthorized }: IssuesTableProps) {
         api<Paginated<Issue>>(`/api/issues?${params}`),
         api<string[]>('/api/services'),
       ]);
+      if (requestId !== latestRequest.current) return;
+      let otherCounts: { status: 'resolved' | 'ignored'; count: number }[] = [];
+      if (result.total === 0 && status === 'unresolved' && params.has('tag')) {
+        const otherStatuses = ['resolved', 'ignored'] as const;
+        otherCounts = await Promise.all(otherStatuses.map(async (otherStatus) => {
+          const otherParams = new URLSearchParams(params);
+          otherParams.set('status', otherStatus);
+          otherParams.set('page', '1');
+          otherParams.set('pageSize', '1');
+          const otherResult = await api<Paginated<Issue>>(`/api/issues?${otherParams}`);
+          return { status: otherStatus, count: otherResult.total };
+        }));
+        if (requestId !== latestRequest.current) return;
+      }
       // A deletion can leave the current page empty; step back to the last page that still has rows.
       if (result.items.length === 0 && result.total > 0 && page > 1) {
         setPage(Math.ceil(result.total / PAGE_SIZE));
@@ -56,20 +75,26 @@ export function IssuesTable({ onSelect, onUnauthorized }: IssuesTableProps) {
       }
       setIssues(result.items);
       setTotal(result.total);
+      setOtherStatusCounts(otherCounts);
       setSelected((current) => new Set([...current].filter((id) => result.items.some((issue) => issue.id === id))));
       setServices(serviceNames);
     } catch (cause) {
+      if (requestId !== latestRequest.current) return;
       const message = cause instanceof Error ? cause.message : 'Unable to load issues';
       if (message.includes('Unauthorized') || message.includes('Session expired')) onUnauthorized();
       else setError(message);
     } finally {
-      setLoading(false);
+      if (requestId === latestRequest.current) setLoading(false);
     }
   }
 
   useEffect(() => {
+    setLoading(true);
     const timer = window.setTimeout(() => void loadIssues(), 180);
-    return () => window.clearTimeout(timer);
+    return () => {
+      window.clearTimeout(timer);
+      latestRequest.current++;
+    };
   }, [status, service, level, tag, search, range, page]);
 
   async function updateStatus(issue: Issue, nextStatus: 'resolved' | 'ignored') {
@@ -107,18 +132,18 @@ export function IssuesTable({ onSelect, onUnauthorized }: IssuesTableProps) {
   return (
     <section className="overflow-hidden rounded-xl border border-line bg-panel">
       {selected.size > 0 && (
-        <div className="flex items-center justify-between border-b border-line bg-sky-950/20 px-4 py-2 text-sm">
-          <span className="text-zinc-300">{selected.size} selected</span>
-          <button className="action-button danger" onClick={() => void deleteSelected()}>Delete selected</button>
+        <div className="fixed bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-4 rounded-lg border border-line bg-panel px-4 py-2 text-sm shadow-xl">
+          <span className="whitespace-nowrap text-zinc-300" aria-live="polite">{selected.size} selected</span>
+          <button className="action-button danger whitespace-nowrap" onClick={() => void deleteSelected()}>Delete selected</button>
         </div>
       )}
       <div className="flex flex-wrap items-center gap-3 border-b border-line p-4">
-        <input
-          aria-label="Search issues"
-          className="min-w-48 flex-1 rounded-lg border border-line bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-sky-500"
+        <SearchFilter
+          label="Search issues"
+          className="min-w-48 flex-1"
           placeholder="Search messages and stack traces"
           value={search}
-          onChange={(event) => resetPage(setSearch)(event.target.value)}
+          onChange={resetPage(setSearch)}
         />
         <select className="filter-select" aria-label="Filter by status" value={status} onChange={(event) => resetPage(setStatus)(event.target.value)}>
           {statuses.map((item) => <option key={item} value={item}>{item === 'all' ? 'All statuses' : item}</option>)}
@@ -131,12 +156,11 @@ export function IssuesTable({ onSelect, onUnauthorized }: IssuesTableProps) {
           <option value="">All levels</option>
           {levels.map((item) => <option key={item} value={item}>{item}</option>)}
         </select>
-        <input
-          aria-label="Filter by tag"
-          className="w-44 rounded-lg border border-line bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-sky-500"
-          placeholder="Tag, e.g. build_type=debug"
+        <AttributeFilter
           value={tag}
-          onChange={(event) => resetPage(setTag)(event.target.value)}
+          onChange={resetPage(setTag)}
+          onUnauthorized={onUnauthorized}
+          view="issues"
         />
         <TimeRangeFilter value={range} onChange={resetPage(setRange)} />
       </div>
@@ -159,7 +183,10 @@ export function IssuesTable({ onSelect, onUnauthorized }: IssuesTableProps) {
               <tr key={issue.id} className="hover:bg-white/[0.025]">
                 <td className="px-5 py-4"><input type="checkbox" aria-label={`Select issue ${issue.title}`} checked={selected.has(issue.id)} onChange={() => toggle(issue.id)} /></td>
                 <td className="w-[40%] max-w-0 px-2 py-4">
-                  <button className="block w-full truncate text-left font-medium text-zinc-100 hover:text-sky-300" onClick={() => onSelect(issue)}>
+                  <button className="block w-full truncate text-left font-medium text-zinc-100 hover:text-sky-300" onClick={() => onSelect(issue, {
+                    tag: /^[^=]+=.+$/.test(tag.trim()) ? tag.trim() : undefined,
+                    search: search.trim() || undefined,
+                  })}>
                     {issue.title}
                   </button>
                   {issue.culprit && issue.culprit !== 'unknown' && (
@@ -183,8 +210,21 @@ export function IssuesTable({ onSelect, onUnauthorized }: IssuesTableProps) {
                 </td>
               </tr>
             ))}
-            {!loading && issues.length === 0 && (
-              <tr><td colSpan={7} className="px-5 py-16 text-center text-zinc-500">No matching issues</td></tr>
+            {!loading && !error && issues.length === 0 && (
+              <tr><td colSpan={7} className="px-5 py-16 text-center text-zinc-500">
+                {otherStatusCounts.some(({ count }) => count > 0) ? (
+                  <div className="space-y-3">
+                    <p>No unresolved issues match. Other matching issues:</p>
+                    <div className="flex flex-wrap justify-center gap-2">
+                      {otherStatusCounts.filter(({ count }) => count > 0).map(({ status: otherStatus, count }) => (
+                        <button key={otherStatus} className="action-button" onClick={() => resetPage(setStatus)(otherStatus)}>
+                          Show {otherStatus} ({count})
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : 'No matching issues'}
+              </td></tr>
             )}
             {loading && <tr><td colSpan={7} className="px-5 py-10 text-center text-zinc-500">Loading issues…</td></tr>}
           </tbody>

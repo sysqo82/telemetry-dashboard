@@ -87,7 +87,9 @@ Data persists in the `telemetry-data` volume; the service restarts unless stoppe
 
 1. **Sign in** at the root URL with `ADMIN_USERNAME` / `ADMIN_PASSWORD`.
 2. **Create an API key** (API keys tab): enter the exact service name your app will send in `service`, click *Create*, and copy the key immediately. Give the app `TELEMETRY_URL` and `TELEMETRY_KEY` (see [CLIENT_IMPLEMENTATION.md](CLIENT_IMPLEMENTATION.md)).
-3. **Triage** in the Issues tab: search (FTS5), filter by status/service, open details (stack traces, tags, metadata), Resolve / Ignore / Delete. A repeat of a resolved issue reopens it.
+3. **Triage** in the Issues tab: search (FTS5), filter by status/service or a `key=value` tag or metadata attribute, open details (stack traces, tags, metadata), Resolve / Ignore / Delete. The same attribute filter is available in Live events. Suggestions use stored event values (up to 50 matches); issue suggestions show their statuses across all stored events. If no unresolved issues match an attribute filter, shortcuts show matching ignored or resolved issues while keeping the other filters. Metadata values must be nonempty strings, numbers, or booleans. A repeat of a resolved issue reopens it.
+   Custom time ranges use local times and apply when you select **Apply**. Either endpoint may be left blank. Switching to a preset clears the custom dates.
+   Issue details show the latest 50 events matching the active search and tag/metadata filters, or the latest 50 events overall when those filters are empty. Status, service, level and time filters apply to the issue list.
 4. **Watch** the Live events tab (polls every 5 s).
 5. **Rotate a key:** create a second key for the service, deploy it, then revoke the old one.
 6. **Revoke a leaked key:** API keys tab → Revoke (effective immediately).

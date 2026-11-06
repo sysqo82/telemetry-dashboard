@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import { api } from '../api';
 import { applyTimeRange, defaultTimeRange, type TimeRange } from '../timeRange';
 import type { EventRecord, Paginated } from '../types';
+import { AttributeFilter } from './AttributeFilter';
 import { Pagination } from './Pagination';
+import { SearchFilter } from './SearchFilter';
 import { TimeRangeFilter } from './TimeRangeFilter';
 
 interface LiveStreamProps {
@@ -97,19 +99,17 @@ export function LiveStream({ onUnauthorized }: LiveStreamProps) {
             {['debug', 'info', 'warn', 'error', 'fatal'].map((item) => <option key={item} value={item}>{item}</option>)}
           </select>
           <TimeRangeFilter value={range} onChange={resetPage(setRange)} />
-          <input
-            aria-label="Filter by tag"
-            className="w-44 rounded-lg border border-line bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-sky-500"
-            placeholder="Tag, e.g. build_type=debug"
+          <AttributeFilter
             value={tag}
-            onChange={(event) => resetPage(setTag)(event.target.value)}
+            onChange={resetPage(setTag)}
+            onUnauthorized={onUnauthorized}
           />
-          <input
-            aria-label="Search live events"
-            className="w-full max-w-sm rounded-lg border border-line bg-zinc-950 px-3 py-2 text-sm outline-none focus:border-sky-500 sm:w-64"
+          <SearchFilter
+            label="Search live events"
+            className="w-full max-w-sm sm:w-64"
             placeholder="Filter messages and stack traces"
             value={search}
-            onChange={(event) => resetPage(setSearch)(event.target.value)}
+            onChange={resetPage(setSearch)}
           />
         </div>
       </div>
