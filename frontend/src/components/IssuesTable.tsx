@@ -174,7 +174,7 @@ export function IssuesTable({ onSelect, onUnauthorized }: IssuesTableProps) {
                     <Sparkline timestamps={issue.recent_timestamps} />
                   </div>
                 </td>
-                <td className="px-4 py-4 whitespace-nowrap text-zinc-400">{new Date(issue.last_seen_at).toLocaleString()}</td>
+                <td className="px-4 py-4 whitespace-nowrap text-zinc-400">{new Date(issue.last_seen_at).toLocaleString('en-GB')}</td>
                 <td className="px-4 py-4">
                   <div className="flex gap-2">
                     {issue.status !== 'resolved' && <button className="action-button" onClick={() => void updateStatus(issue, 'resolved')}>Resolve</button>}

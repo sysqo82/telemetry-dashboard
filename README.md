@@ -55,7 +55,7 @@ cp .env.example .env     # PowerShell: Copy-Item .env.example .env
 | `PORT` | `8080` | HTTP port |
 | `HOST` | `0.0.0.0` | Bind address |
 | `DB_PATH` | `./data/telemetry.sqlite` | SQLite file (directory auto-created) |
-| `RETENTION_DAYS` | `30` | Days to keep raw events |
+| `RETENTION_DAYS` | `7` | Days to keep raw events |
 | `ALERT_WEBHOOK_URL` | *(optional)* | ntfy.sh topic, Discord webhook, or generic JSON webhook |
 
 Generate a password: `node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"`
