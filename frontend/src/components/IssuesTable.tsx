@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { api } from '../api';
+import { downloadJson, eventJson } from '../eventJson';
 import { applyTimeRange, defaultTimeRange, type TimeRange } from '../timeRange';
-import type { Issue, Paginated } from '../types';
+import type { EventRecord, Issue, Paginated } from '../types';
 import { AttributeFilter } from './AttributeFilter';
 import { Pagination } from './Pagination';
 import { SearchFilter } from './SearchFilter';
@@ -119,6 +120,18 @@ export function IssuesTable({ onSelect, onUnauthorized }: IssuesTableProps) {
     }
   }
 
+  async function exportSelected() {
+    setError('');
+    try {
+      const results = await Promise.all([...selected].map((id) =>
+        api<{ events: EventRecord[] }>(`/api/issues/${encodeURIComponent(id)}`)));
+      const latest = results.flatMap(({ events }) => events.slice(0, 1));
+      downloadJson(eventJson(latest), 'latest-events.json');
+    } catch (cause) {
+      setError(cause instanceof Error ? `Unable to export events: ${cause.message}` : 'Unable to export events.');
+    }
+  }
+
   const allSelected = issues.length > 0 && issues.every((issue) => selected.has(issue.id));
 
   function toggle(id: string) {
@@ -134,6 +147,7 @@ export function IssuesTable({ onSelect, onUnauthorized }: IssuesTableProps) {
       {selected.size > 0 && (
         <div className="fixed bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-4 rounded-lg border border-line bg-panel px-4 py-2 text-sm shadow-xl">
           <span className="whitespace-nowrap text-zinc-300" aria-live="polite">{selected.size} selected</span>
+          <button className="action-button whitespace-nowrap" onClick={() => void exportSelected()}>Export latest events</button>
           <button className="action-button danger whitespace-nowrap" onClick={() => void deleteSelected()}>Delete selected</button>
         </div>
       )}

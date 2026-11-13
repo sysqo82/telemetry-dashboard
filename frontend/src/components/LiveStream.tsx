@@ -114,9 +114,9 @@ export function LiveStream({ onUnauthorized }: LiveStreamProps) {
         </div>
       </div>
       {selected.size > 0 && (
-        <div className="flex items-center justify-between border-b border-line bg-sky-950/20 px-4 py-2 text-sm">
-          <span className="text-zinc-300">{selected.size} selected</span>
-          <button className="action-button danger" onClick={() => void deleteSelected()}>Delete selected</button>
+        <div className="fixed bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-4 rounded-lg border border-line bg-panel px-4 py-2 text-sm shadow-xl">
+          <span className="whitespace-nowrap text-zinc-300" aria-live="polite">{selected.size} selected</span>
+          <button className="action-button danger whitespace-nowrap" onClick={() => void deleteSelected()}>Delete selected</button>
         </div>
       )}
       {error && <p className="border-b border-red-900/60 bg-red-950/30 px-4 py-3 text-sm text-red-300">{error}</p>}
