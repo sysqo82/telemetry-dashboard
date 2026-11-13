@@ -1,7 +1,7 @@
 {
   "name": "telemetry-monitor",
   "author": "Assaf Itzikson",
-  "version": "0.7.14",
+  "version": "0.7.18",
   "private": true,
   "type": "module",
   "engines": {
@@ -9,6 +9,7 @@
   },
   "scripts": {
     "dev": "tsx watch --env-file-if-exists=.env src/index.ts",
+    "full-build": "docker compose up -d --build",
     "build": "yarn typecheck && yarn build:frontend && tsc -p tsconfig.build.json",
     "build:backend": "tsc -p tsconfig.build.json",
     "build:frontend": "vite build --config frontend/vite.config.ts",

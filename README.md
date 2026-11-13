@@ -90,7 +90,8 @@ Data persists in the `telemetry-data` volume; the service restarts unless stoppe
 3. **Triage** in the Issues tab: search (FTS5), filter by status/service or a `key=value` tag or metadata attribute, open details (stack traces, tags, metadata), Resolve / Ignore / Delete. The same attribute filter is available in Live events. Suggestions use stored event values (up to 50 matches); issue suggestions show their statuses across all stored events. If no unresolved issues match an attribute filter, shortcuts show matching ignored or resolved issues while keeping the other filters. Metadata values must be nonempty strings, numbers, or booleans. A repeat of a resolved issue reopens it.
    Custom time ranges use local times and apply when you select **Apply**. Either endpoint may be left blank. Switching to a preset clears the custom dates.
    Issue details show the latest 50 events matching the active search and tag/metadata filters, or the latest 50 events overall when those filters are empty. Status, service, level and time filters apply to the issue list.
-4. **Watch** the Live events tab (polls every 5 s).
+   Copy an individual event as JSON, or select displayed events and export them as a JSON array. In the Issues tab, select issues and export the latest event of each as a JSON array. Both include all event fields with tags and metadata decoded as JSON; exported data may contain sensitive information. Clipboard access requires HTTPS or localhost.
+4. **Watch** the Live events tab (polls every 5 s). Select events to delete them using the floating action bar.
 5. **Rotate a key:** create a second key for the service, deploy it, then revoke the old one.
 6. **Revoke a leaked key:** API keys tab → Revoke (effective immediately).
 7. **Alerts:** `error`/`fatal` events post to `ALERT_WEBHOOK_URL`; the same issue alerts at most once per 30 minutes (in-memory; resets on restart).

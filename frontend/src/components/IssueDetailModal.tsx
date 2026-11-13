@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api';
+import { eventJson } from '../eventJson';
 import type { EventRecord, Issue } from '../types';
 
 interface IssueDetailModalProps {
@@ -22,6 +23,9 @@ export function IssueDetailModal({ issue, filters, onClose, onDeleted }: IssueDe
   const [events, setEvents] = useState<EventRecord[]>([]);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [notice, setNotice] = useState('');
+  const [copiedId, setCopiedId] = useState('');
 
   useEffect(() => {
     const params = new URLSearchParams();
@@ -52,6 +56,39 @@ export function IssueDetailModal({ issue, filters, onClose, onDeleted }: IssueDe
     }
   }
 
+  async function copyEvent(event: EventRecord) {
+    setError('');
+    setNotice('');
+    try {
+      await navigator.clipboard.writeText(eventJson(event));
+      setCopiedId(event.id);
+      setTimeout(() => setCopiedId((current) => (current === event.id ? '' : current)), 1500);
+    } catch (cause) {
+      setError(cause instanceof Error ? `Unable to copy event: ${cause.message}` : 'Unable to copy event.');
+    }
+  }
+
+  function exportSelected() {
+    setError('');
+    setNotice('');
+    try {
+      const json = eventJson(events.filter((event) => selected.has(event.id)));
+      const url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+      try {
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `events-${issue.id}.json`;
+        link.click();
+      } finally {
+        URL.revokeObjectURL(url);
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? `Unable to export events: ${cause.message}` : 'Unable to export events.');
+    }
+  }
+
+  const allSelected = events.length > 0 && events.every((event) => selected.has(event.id));
+
   return (
     <div className="fixed inset-0 z-20 flex items-start justify-center overflow-y-auto bg-black/70 p-4 pt-10 backdrop-blur-sm" onMouseDown={(event) => {
       if (event.target === event.currentTarget) onClose();
@@ -71,9 +108,19 @@ export function IssueDetailModal({ issue, filters, onClose, onDeleted }: IssueDe
           {(filters.tag || filters.search) && (
             <p className="text-sm text-zinc-400">Showing up to 50 events matching the active {filters.tag && filters.search ? 'search and attribute filters' : filters.tag ? 'attribute filter' : 'search'}.</p>
           )}
-          {error && <p className="rounded-lg bg-red-950/40 p-3 text-sm text-red-300">{error}</p>}
+          {error && <p role="alert" className="rounded-lg bg-red-950/40 p-3 text-sm text-red-300">{error}</p>}
+          {notice && <p role="status" className="text-sm text-zinc-300">{notice}</p>}
           {loading && <p className="text-sm text-zinc-400">Loading events…</p>}
           {!loading && !error && events.length === 0 && <p className="text-sm text-zinc-500">{filters.tag || filters.search ? 'No matching events.' : 'No event details.'}</p>}
+          {events.length > 0 && (
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="flex items-center gap-2 text-sm text-zinc-300">
+                <input type="checkbox" checked={allSelected} onChange={() => setSelected(allSelected ? new Set() : new Set(events.map((event) => event.id)))} />
+                Select all displayed events
+              </label>
+              <button className="action-button" disabled={selected.size === 0} onClick={exportSelected}>Export selected ({selected.size})</button>
+            </div>
+          )}
           {events.map((event) => {
             const frames = event.stacktrace?.split('\n') ?? [];
             const appFrames = frames.filter((frame) => !frame.includes('node_modules'));
@@ -81,8 +128,18 @@ export function IssueDetailModal({ issue, filters, onClose, onDeleted }: IssueDe
             return (
               <article key={event.id} className="rounded-lg border border-line bg-zinc-950/60 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className={`level-tag ${event.level}`}>{event.level}</span>
-                  <time className="text-xs text-zinc-500">{new Date(event.created_at).toLocaleString('en-GB')}</time>
+                  <div className="flex items-center gap-2">
+                    <input type="checkbox" aria-label={`Select event ${event.id}`} checked={selected.has(event.id)} onChange={() => setSelected((current) => {
+                      const next = new Set(current);
+                      if (!next.delete(event.id)) next.add(event.id);
+                      return next;
+                    })} />
+                    <span className={`level-tag ${event.level}`}>{event.level}</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <time className="text-xs text-zinc-500">{new Date(event.created_at).toLocaleString('en-GB')}</time>
+                    <button className="action-button" aria-label={`Copy event ${event.id} as JSON`} onClick={() => void copyEvent(event)}>{copiedId === event.id ? 'Copied' : 'Copy JSON'}</button>
+                  </div>
                 </div>
                 <p className="mt-3 whitespace-pre-wrap break-words text-sm text-zinc-200">{event.message}</p>
                 {appFrames.length > 0 && <pre className="mt-3 overflow-x-auto rounded-md bg-black/40 p-3 text-xs leading-5 text-zinc-300">{appFrames.join('\n')}</pre>}
